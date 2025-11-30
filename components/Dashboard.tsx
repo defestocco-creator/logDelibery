@@ -28,8 +28,15 @@ const Dashboard: React.FC<DashboardProps> = ({ userEmail, onLogout }) => {
     setLoading(true);
     try {
       const data = await dataService.getMetrics();
-      // Convert Object of Objects to Array and sort safely
-      const metricsArray = Object.values(data).sort((a, b) => (a.timestampMs || 0) - (b.timestampMs || 0));
+      if (!data) {
+        setMetrics([]);
+        return;
+      }
+      // Safely convert object to array and filter invalid entries
+      const metricsArray = Object.values(data)
+        .filter((item): item is MetricData => !!item && typeof item === 'object')
+        .sort((a, b) => (a.timestampMs || 0) - (b.timestampMs || 0));
+      
       setMetrics(metricsArray);
       setLastUpdated(new Date());
     } catch (error) {
@@ -66,31 +73,54 @@ const Dashboard: React.FC<DashboardProps> = ({ userEmail, onLogout }) => {
 
   // --- Derived Statistics ---
   const stats = useMemo(() => {
-    if (metrics.length === 0) return { avgLatency: '0.00', totalRequests: 0, errorRate: '0.0', peakLatency: '0.00' };
+    if (!metrics || metrics.length === 0) {
+      return { avgLatency: '0.00', totalRequests: 0, errorRate: '0.0', peakLatency: '0.00' };
+    }
     
     const totalRequests = metrics.length;
-    // Add fallback for responseTimeMs
-    const totalLatency = metrics.reduce((acc, curr) => acc + (curr.responseTimeMs || 0), 0);
-    const avgLatency = (totalLatency / totalRequests).toFixed(2);
-    const errors = metrics.filter(m => m.statusCode >= 400).length;
-    const errorRate = ((errors / totalRequests) * 100).toFixed(1);
     
-    const latencies = metrics.map(m => m.responseTimeMs || 0);
-    const peakLatency = latencies.length > 0 ? Math.max(...latencies).toFixed(2) : '0.00';
+    // Safely extract latencies, ensuring they are numbers
+    const validLatencies = metrics
+      .map(m => m.responseTimeMs)
+      .filter((val): val is number => typeof val === 'number' && !isNaN(val));
+
+    const totalLatency = validLatencies.reduce((acc, curr) => acc + curr, 0);
+    const avgLatency = validLatencies.length > 0 
+      ? (totalLatency / validLatencies.length).toFixed(2) 
+      : '0.00';
+    
+    const errors = metrics.filter(m => m.statusCode >= 400).length;
+    const errorRate = totalRequests > 0 
+      ? ((errors / totalRequests) * 100).toFixed(1) 
+      : '0.0';
+    
+    const peakLatency = validLatencies.length > 0 
+      ? Math.max(...validLatencies).toFixed(2) 
+      : '0.00';
 
     return { avgLatency, totalRequests, errorRate, peakLatency };
   }, [metrics]);
 
   // --- Chart Data Preparation ---
   const latencyData = useMemo(() => {
-    return metrics.slice(-30).map((m, i) => ({
-      name: i, 
-      ms: parseFloat((m.responseTimeMs || 0).toFixed(2)),
-      time: m.timestampMs ? new Date(m.timestampMs).toLocaleTimeString([], { hour: '2-digit', minute:'2-digit', second:'2-digit' }) : ''
-    }));
+    if (!metrics) return [];
+    
+    return metrics.slice(-30).map((m, i) => {
+      // Ensure we have a valid number for toFixed
+      const latencyVal = typeof m.responseTimeMs === 'number' ? m.responseTimeMs : 0;
+      
+      return {
+        name: i, 
+        ms: parseFloat(latencyVal.toFixed(2)),
+        time: m.timestampMs 
+          ? new Date(m.timestampMs).toLocaleTimeString([], { hour: '2-digit', minute:'2-digit', second:'2-digit' }) 
+          : ''
+      };
+    });
   }, [metrics]);
 
   const methodData = useMemo(() => {
+    if (!metrics) return [];
     const counts: Record<string, number> = {};
     metrics.forEach(m => {
       const method = m.method || 'UNKNOWN';
@@ -279,24 +309,27 @@ const Dashboard: React.FC<DashboardProps> = ({ userEmail, onLogout }) => {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800">
-                {metrics.slice(-10).reverse().map((m, idx) => (
-                  <tr key={idx} className="hover:bg-slate-800/50 transition-colors">
-                    <td className="px-6 py-4">
-                      <StatusBadge code={m.statusCode} />
-                    </td>
-                    <td className="px-6 py-4 font-mono text-white">{m.method}</td>
-                    <td className="px-6 py-4 font-mono text-cyan-400">{m.endpoint}</td>
-                    <td className="px-6 py-4">
-                      <span className={`${(m.responseTimeMs || 0) > 500 ? 'text-orange-400' : 'text-emerald-400'}`}>
-                        {(m.responseTimeMs || 0).toFixed(2)} ms
-                      </span>
-                    </td>
-                    <td className="px-6 py-4">{m.responseSizeBytes}</td>
-                    <td className="px-6 py-4 text-slate-500">
-                      {m.timestampMs ? new Date(m.timestampMs).toLocaleString() : '-'}
-                    </td>
-                  </tr>
-                ))}
+                {metrics.slice(-10).reverse().map((m, idx) => {
+                  const latencyVal = typeof m.responseTimeMs === 'number' ? m.responseTimeMs : 0;
+                  return (
+                    <tr key={idx} className="hover:bg-slate-800/50 transition-colors">
+                      <td className="px-6 py-4">
+                        <StatusBadge code={m.statusCode} />
+                      </td>
+                      <td className="px-6 py-4 font-mono text-white">{m.method}</td>
+                      <td className="px-6 py-4 font-mono text-cyan-400">{m.endpoint}</td>
+                      <td className="px-6 py-4">
+                        <span className={`${latencyVal > 500 ? 'text-orange-400' : 'text-emerald-400'}`}>
+                          {latencyVal.toFixed(2)} ms
+                        </span>
+                      </td>
+                      <td className="px-6 py-4">{m.responseSizeBytes}</td>
+                      <td className="px-6 py-4 text-slate-500">
+                        {m.timestampMs ? new Date(m.timestampMs).toLocaleString() : '-'}
+                      </td>
+                    </tr>
+                  );
+                })}
                 {metrics.length === 0 && (
                   <tr>
                     <td colSpan={6} className="px-6 py-8 text-center text-slate-500">
