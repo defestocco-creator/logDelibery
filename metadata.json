@@ -1,0 +1,5 @@
+{
+  "name": "Delibery Analytics Hub",
+  "description": "A professional dashboard to monitor API metrics, latency, and request logs for the Delibery API.",
+  "requestFramePermissions": []
+}
